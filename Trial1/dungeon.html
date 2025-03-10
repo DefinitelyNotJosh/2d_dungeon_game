@@ -1,0 +1,2162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dungeon Crawler</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #222;
+            font-family: 'Georgia', serif;
+        }
+        #gameCanvas {
+            border: 2px solid #4a2f1b; /* Dark brown border */
+            background: #2a1f15; /* Dark background for canvas */
+        }
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 510px;
+            font-family: 'Georgia', serif;
+            color: #000;
+            background: #f4e4bc; /* Parchment-like background */
+            padding: 10px;
+            border: 4px solid #8B4513; /* Wooden frame */
+        }
+        #inventoryMenu, #skillMenu {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #f4e4bc;
+            padding: 10px;
+            border: 4px solid #8B4513;
+            font-family: 'Georgia', serif;
+            color: #000;
+            z-index: 10;
+        }
+        .selected { background-color: yellow; }
+        .unlocked { color: green; }
+        .available { color: black; }
+        .locked { color: gray; }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="500" height="500"></canvas>
+    <div id="inventoryMenu">
+        <h2>Inventory</h2>
+        <ul id="gearList"></ul>
+        <p>Arrow keys to select, Enter to equip/unequip</p>
+    </div>
+    <div id="skillMenu">
+        <h2>Skills</h2>
+        <p>Points: <span id="skillPoints">0</span></p>
+        <ul id="skillList"></ul>
+        <p>Arrow keys to select, Enter to unlock</p>
+    </div>
+    <script>
+        // Floor system
+        let currentFloor = 1;
+        const maxFloors = 3;
+
+        // Generate floor function
+        function generateFloor() {
+            // Reset map
+            map = Array(mapHeight).fill().map(() => Array(mapWidth).fill(0));
+            
+            // Generate basic dungeon layout
+            for (let y = 0; y < mapHeight; y++) {
+                for (let x = 0; x < mapWidth; x++) {
+                    map[y][x] = Math.random() > 0.2 ? 1 : 0; // 1 = floor, 0 = wall
+                }
+            }
+            
+            // Ensure starting position and boss room are clear
+            map[1][1] = 1; // Starting position
+            map[mapHeight - 2][mapWidth - 2] = 3; // Locked door
+            map[mapHeight - 1][mapWidth - 1] = 1; // Boss room
+            
+            // Reset player position
+            player.tileX = 1;
+            player.tileY = 1;
+            player.hasKey = false;
+            player.doorOpened = false;
+            
+            // Clear existing monsters and spawn new ones with scaled difficulty
+            monsters = [];
+            
+            // Scale number of monsters based on floor
+            const goblinCount = 7 + (currentFloor - 1) * 3; // 7, 10, 13
+            const skeletonCount = 2 + Math.floor((currentFloor - 1) * 1.5); // 2, 3, 5
+            
+            // Spawn goblins with scaled stats
+            for (let i = 0; i < goblinCount; i++) {
+                let x, y;
+                do {
+                    x = Math.floor(Math.random() * mapWidth);
+                    y = Math.floor(Math.random() * mapHeight);
+                } while (map[y][x] !== 1 || (x === player.tileX && y === player.tileY));
+                
+                monsters.push({
+                    type: 'goblin',
+                    hp: Math.floor(20 * (1 + (currentFloor - 1) * 0.5)), // +50% per floor
+                    atk: 15 * (1 + (currentFloor - 1) * 0.3), // Increased from 3 to 15 (5x damage)
+                    spd: 1.5,
+                    tileX: x,
+                    tileY: y,
+                    xp: 50,
+                    lastMoveTime: 0,
+                    hitFrame: 0
+                });
+            }
+            
+            // Spawn skeletons with scaled stats
+            for (let i = 0; i < skeletonCount; i++) {
+                let x, y;
+                do {
+                    x = Math.floor(Math.random() * mapWidth);
+                    y = Math.floor(Math.random() * mapHeight);
+                } while (map[y][x] !== 1 || (x === player.tileX && y === player.tileY));
+                
+                monsters.push({
+                    type: 'skeleton',
+                    hp: Math.floor(30 * (1 + (currentFloor - 1) * 0.5)), // +50% per floor
+                    atk: 25 * (1 + (currentFloor - 1) * 0.3), // Increased from 5 to 25 (5x damage)
+                    spd: 1,
+                    tileX: x,
+                    tileY: y,
+                    xp: 100,
+                    lastMoveTime: 0,
+                    hitFrame: 0
+                });
+            }
+            
+            // Spawn mini-boss with scaled stats
+            monsters.push({
+                type: 'mini-boss',
+                hp: Math.floor(100 * (1 + (currentFloor - 1) * 0.5)), // +50% per floor
+                atk: 35 * (1 + (currentFloor - 1) * 0.3), // Increased from 7 to 35 (5x damage)
+                spd: 1.5,
+                tileX: mapWidth - 3,
+                tileY: mapHeight - 3,
+                xp: 250,
+                dropsKey: true,
+                lastMoveTime: 0,
+                hitFrame: 0
+            });
+            
+            // Spawn boss with scaled stats
+            monsters.push({
+                type: 'boss',
+                hp: Math.floor(200 * (1 + (currentFloor - 1) * 0.5)), // +50% per floor
+                atk: 50 * (1 + (currentFloor - 1) * 0.3), // Increased from 10 to 50 (5x damage)
+                spd: 1,
+                tileX: mapWidth - 1,
+                tileY: mapHeight - 1,
+                xp: 1000,
+                lastMoveTime: 0,
+                hitFrame: 0
+            });
+            
+            // Clear existing chests and spawn new ones
+            chests = [];
+            spawnChests();
+        }
+
+        // Map setup
+        const mapWidth = 20, mapHeight = 20;
+        const tileSize = 50;
+        let map = Array(mapHeight).fill().map(() => Array(mapWidth).fill(0));
+        for (let y = 0; y < mapHeight; y++) {
+            for (let x = 0; x < mapWidth; x++) {
+                map[y][x] = Math.random() > 0.2 ? 1 : 0; // 1 = floor, 0 = wall
+            }
+        }
+        map[1][1] = 1; // Starting position
+        map[mapHeight - 2][mapWidth - 2] = 3; // Locked door
+        map[mapHeight - 1][mapWidth - 1] = 1; // Boss room
+
+        // Gear list definition moved here
+        const gearList = [
+            { name: 'Wooden Sword', type: 'weapon', atk: 2 },
+            { name: 'Iron Sword', type: 'weapon', atk: 5 },
+            { name: 'Leather Armor', type: 'armor', def: 3 },
+            { name: 'Chain Mail', type: 'armor', def: 7 },
+            { name: 'Ring of Strength', type: 'accessory', atk: 2 },
+            { name: 'Legendary Sword', type: 'weapon', atk: 15 },
+            { name: 'Steel Axe', type: 'weapon', atk: 8 },
+            { name: 'Plate Armor', type: 'armor', def: 10 },
+            { name: 'Speed Ring', type: 'accessory', spd: 2 },
+            { name: 'Magic Staff', type: 'weapon', atk: 12 }
+        ];
+
+        // Load game sprites
+        const sprites = {};
+        const loadedImages = {};
+        
+        function loadSprites() {
+            // Create sprite data URLs
+            sprites.player = createPlayerSprite();
+            
+            // Only initialize these sprites if they don't exist yet
+            if (!sprites.goblin) sprites.goblin = createGoblinSprite();
+            if (!sprites.skeleton) sprites.skeleton = createSkeletonSprite();
+            if (!sprites.miniBoss) sprites.miniBoss = createMiniBossSprite();
+            if (!sprites.boss) sprites.boss = createBossSprite();
+            if (!sprites.floor) sprites.floor = createFloorSprite();
+            if (!sprites.wall) sprites.wall = createWallSprite();
+            if (!sprites.chest) sprites.chest = createChestSprite();
+            if (!sprites.door) sprites.door = createDoorSprite();
+            
+            // Preload all images
+            for (const key in sprites) {
+                loadedImages[key] = new Image();
+                loadedImages[key].src = sprites[key];
+            }
+        }
+
+        // Create sprite data URLs using canvas
+        function createPlayerSprite() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Body color based on equipped armor
+            let bodyColor = '#1a3c8a'; // Default blue armor
+            let helmetColor = '#d0d0d0'; // Default silver helmet
+            let armorDetail = '#0f2a6b'; // Default armor detail color
+            let armorPattern = null; // For special armor patterns
+            
+            if (player.equipped.armor) {
+                switch (player.equipped.armor.name) {
+                    case 'Leather Armor':
+                        bodyColor = '#8B4513'; // Brown leather
+                        helmetColor = '#A0522D'; // Lighter brown helmet
+                        armorDetail = '#6B3E26'; // Darker brown detail
+                        // Add leather stitching pattern
+                        armorPattern = (x, y) => {
+                            ctx.strokeStyle = '#5D3A1A';
+                            ctx.lineWidth = 1;
+                            // Horizontal stitches
+                            for (let i = y + 4; i < y + 32; i += 8) {
+                                ctx.beginPath();
+                                ctx.moveTo(x + 4, i);
+                                ctx.lineTo(x + 28, i);
+                                ctx.stroke();
+                            }
+                        };
+                        break;
+                    case 'Chain Mail':
+                        bodyColor = '#A0A0A0'; // Silver chainmail
+                        helmetColor = '#C0C0C0'; // Lighter silver helmet
+                        armorDetail = '#707070'; // Darker silver detail
+                        // Add chainmail pattern
+                        armorPattern = (x, y) => {
+                            ctx.fillStyle = '#808080';
+                            for (let i = x + 4; i < x + 32; i += 4) {
+                                for (let j = y + 4; j < y + 32; j += 4) {
+                                    ctx.fillRect(i, j, 2, 2);
+                                }
+                            }
+                        };
+                        break;
+                    case 'Plate Armor':
+                        bodyColor = '#FFD700'; // Gold plate
+                        helmetColor = '#FFEC8B'; // Lighter gold helmet
+                        armorDetail = '#DAA520'; // Darker gold detail
+                        // Add plate armor pattern
+                        armorPattern = (x, y) => {
+                            ctx.strokeStyle = '#B8860B';
+                            ctx.lineWidth = 1;
+                            // Plate segments
+                            ctx.strokeRect(x + 4, y + 4, 24, 8);
+                            ctx.strokeRect(x + 4, y + 12, 24, 8);
+                            ctx.strokeRect(x + 4, y + 20, 24, 8);
+                            
+                            // Highlight
+                            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                            ctx.fillRect(x + 6, y + 6, 20, 2);
+                            ctx.fillRect(x + 6, y + 14, 20, 2);
+                            ctx.fillRect(x + 6, y + 22, 20, 2);
+                        };
+                        break;
+                }
+            }
+            
+            // Body (armor)
+            ctx.fillStyle = bodyColor;
+            ctx.fillRect(16, 16, 32, 32);
+            
+            // Apply armor pattern if exists
+            if (armorPattern) {
+                armorPattern(16, 16);
+            }
+            
+            // Helmet (with details)
+            ctx.fillStyle = helmetColor;
+            ctx.fillRect(20, 8, 24, 12);
+            ctx.fillStyle = armorDetail;
+            ctx.fillRect(22, 10, 20, 2);
+            
+            // Face
+            ctx.fillStyle = '#ffd29c';
+            ctx.fillRect(24, 12, 16, 8);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(28, 14, 2, 2); // Left eye
+            ctx.fillRect(34, 14, 2, 2); // Right eye
+            
+            // Shield (color matches armor)
+            ctx.fillStyle = bodyColor;
+            ctx.fillRect(8, 24, 10, 16);
+            ctx.strokeStyle = '#ffd700';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(8, 24, 10, 16);
+            
+            // Shield emblem based on armor type
+            if (player.equipped.armor) {
+                switch (player.equipped.armor.name) {
+                    case 'Leather Armor':
+                        // Simple leather shield design
+                        ctx.fillStyle = '#5D3A1A';
+                        ctx.beginPath();
+                        ctx.arc(13, 32, 3, 0, Math.PI * 2);
+                        ctx.fill();
+                        break;
+                    case 'Chain Mail':
+                        // Cross design
+                        ctx.fillStyle = '#606060';
+                        ctx.fillRect(11, 28, 4, 8);
+                        ctx.fillRect(9, 30, 8, 4);
+                        break;
+                    case 'Plate Armor':
+                        // Dragon emblem
+                        ctx.fillStyle = '#B8860B';
+                        ctx.beginPath();
+                        ctx.moveTo(13, 28);
+                        ctx.lineTo(10, 32);
+                        ctx.lineTo(13, 36);
+                        ctx.lineTo(16, 32);
+                        ctx.closePath();
+                        ctx.fill();
+                        break;
+                }
+            }
+            
+            // Legs with details
+            ctx.fillStyle = bodyColor;
+            ctx.fillRect(20, 48, 10, 12);
+            ctx.fillRect(34, 48, 10, 12);
+            ctx.fillStyle = armorDetail;
+            ctx.fillRect(20, 52, 10, 2);
+            ctx.fillRect(34, 52, 10, 2);
+            
+            // Dynamic weapon based on equipped item
+            if (player.equipped.weapon) {
+                switch (player.equipped.weapon.name) {
+                    case 'Wooden Sword':
+                        ctx.fillStyle = '#8b4513'; // Brown wood
+                        ctx.fillRect(48, 20, 12, 4);
+                        ctx.fillStyle = '#a0522d'; // Lighter handle
+                        ctx.fillRect(44, 18, 6, 8);
+                        break;
+                    case 'Iron Sword':
+                        // Main blade
+                        ctx.fillStyle = '#a0a0a0'; // Silver blade
+                        ctx.fillRect(48, 16, 14, 6);
+                        
+                        // Blade edge highlight
+                        ctx.fillStyle = '#d0d0d0'; // Lighter silver for edge
+                        ctx.fillRect(48, 16, 14, 2);
+                        
+                        // Blade groove
+                        ctx.fillStyle = '#808080'; // Darker silver for groove
+                        ctx.fillRect(50, 19, 10, 1);
+                        
+                        // Cross-guard
+                        ctx.fillStyle = '#666666'; // Dark metal
+                        ctx.fillRect(46, 20, 18, 2);
+                        
+                        // Handle
+                        ctx.fillStyle = '#8b4513'; // Brown leather handle
+                        ctx.fillRect(44, 22, 6, 8);
+                        
+                        // Handle wrap detail
+                        ctx.strokeStyle = '#6b3e26'; // Darker brown for leather wrap
+                        ctx.lineWidth = 1;
+                        for (let i = 23; i < 29; i += 2) {
+                            ctx.beginPath();
+                            ctx.moveTo(44, i);
+                            ctx.lineTo(50, i);
+                            ctx.stroke();
+                        }
+                        
+                        // Pommel
+                        ctx.fillStyle = '#666666'; // Dark metal
+                        ctx.fillRect(44, 30, 6, 2);
+                        break;
+                    case 'Steel Axe':
+                        // Enhanced Steel Axe with better shape and details
+                        // Handle
+                        ctx.fillStyle = '#8b4513'; // Wooden handle
+                        ctx.fillRect(44, 16, 4, 16);
+                        
+                        // Wood grain on handle
+                        ctx.strokeStyle = '#6B3E26';
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(44, 18);
+                        ctx.lineTo(48, 18);
+                        ctx.moveTo(44, 22);
+                        ctx.lineTo(48, 22);
+                        ctx.moveTo(44, 26);
+                        ctx.lineTo(48, 26);
+                        ctx.stroke();
+                        
+                        // Axe head - more detailed
+                        ctx.fillStyle = '#a0a0a0'; // Steel color
+                        ctx.beginPath();
+                        ctx.moveTo(48, 16); // Top of handle
+                        ctx.lineTo(60, 12); // Top point of axe
+                        ctx.lineTo(60, 24); // Bottom point of axe
+                        ctx.lineTo(48, 28); // Bottom of handle
+                        ctx.fill();
+                        
+                        // Axe edge highlight
+                        ctx.strokeStyle = '#d0d0d0';
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(60, 12);
+                        ctx.lineTo(60, 24);
+                        ctx.stroke();
+                        
+                        // Metal details on axe head
+                        ctx.strokeStyle = '#808080';
+                        ctx.beginPath();
+                        ctx.moveTo(52, 16);
+                        ctx.lineTo(58, 14);
+                        ctx.moveTo(52, 20);
+                        ctx.lineTo(58, 18);
+                        ctx.moveTo(52, 24);
+                        ctx.lineTo(58, 22);
+                        ctx.stroke();
+                        break;
+                    case 'Legendary Sword':
+                        ctx.fillStyle = '#ffd700'; // Gold blade
+                        ctx.fillRect(48, 20, 16, 4);
+                        ctx.fillStyle = '#ff0000'; // Red gem handle
+                        ctx.fillRect(44, 18, 6, 8);
+                        
+                        // Add glow effect
+                        const glowGradient = ctx.createRadialGradient(
+                            56, 22, 0,
+                            56, 22, 10
+                        );
+                        glowGradient.addColorStop(0, 'rgba(255, 215, 0, 0.6)');
+                        glowGradient.addColorStop(1, 'rgba(255, 215, 0, 0)');
+                        ctx.fillStyle = glowGradient;
+                        ctx.fillRect(44, 12, 24, 20);
+                        break;
+                    case 'Magic Staff':
+                        ctx.fillStyle = '#8a2be2'; // Purple staff
+                        ctx.fillRect(48, 16, 4, 20);
+                        ctx.fillStyle = '#00ffff'; // Cyan gem
+                        ctx.beginPath();
+                        ctx.arc(50, 14, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                        
+                        // Add magic effect
+                        ctx.strokeStyle = 'rgba(0, 255, 255, 0.6)';
+                        ctx.lineWidth = 1;
+                        for (let i = 0; i < 4; i++) {
+                            const angle = Math.PI * 2 * i / 4;
+                            ctx.beginPath();
+                            ctx.moveTo(50, 14);
+                            ctx.lineTo(50 + Math.cos(angle) * 8, 14 + Math.sin(angle) * 8);
+                            ctx.stroke();
+                        }
+                        break;
+                    default:
+                        // Default sword if unrecognized
+                        ctx.fillStyle = '#d0d0d0';
+                        ctx.fillRect(48, 20, 12, 4);
+                        ctx.fillStyle = '#ffd700';
+                        ctx.fillRect(44, 18, 6, 8);
+                }
+            } else {
+                // No weapon equipped
+                ctx.fillStyle = '#d0d0d0';
+                ctx.fillRect(48, 20, 12, 4);
+                ctx.fillStyle = '#ffd700';
+                ctx.fillRect(44, 18, 6, 8);
+            }
+            
+            // Add outline to make player more visible
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(16, 16, 32, 32); // Body outline
+            ctx.strokeRect(20, 8, 24, 12); // Helmet outline
+            ctx.strokeRect(20, 48, 10, 12); // Left leg outline
+            ctx.strokeRect(34, 48, 10, 12); // Right leg outline
+            
+            return canvas.toDataURL();
+        }
+
+        function createGoblinSprite() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Body
+            ctx.fillStyle = '#2a9d2a';
+            ctx.beginPath();
+            ctx.ellipse(32, 32, 16, 20, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Head
+            ctx.fillStyle = '#2a9d2a';
+            ctx.beginPath();
+            ctx.ellipse(32, 20, 12, 10, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Eyes
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath();
+            ctx.ellipse(28, 18, 3, 3, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(36, 18, 3, 3, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Mouth
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.ellipse(32, 24, 6, 2, 0, 0, Math.PI);
+            ctx.fill();
+            
+            // Ears
+            ctx.fillStyle = '#2a9d2a';
+            ctx.beginPath();
+            ctx.moveTo(20, 16);
+            ctx.lineTo(24, 10);
+            ctx.lineTo(28, 16);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(36, 16);
+            ctx.lineTo(40, 10);
+            ctx.lineTo(44, 16);
+            ctx.fill();
+            
+            // Weapon (club)
+            ctx.fillStyle = '#8b4513';
+            ctx.fillRect(44, 28, 4, 16);
+            ctx.fillStyle = '#a0522d';
+            ctx.beginPath();
+            ctx.ellipse(46, 26, 6, 4, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            return canvas.toDataURL();
+        }
+
+        function createSkeletonSprite() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Body (bones)
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(28, 24, 8, 24); // Spine
+            ctx.fillRect(20, 32, 24, 4); // Ribs
+            ctx.fillRect(20, 38, 24, 4); // Ribs
+            
+            // Skull
+            ctx.fillStyle = '#f0f0f0';
+            ctx.beginPath();
+            ctx.ellipse(32, 16, 10, 12, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Eye sockets
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.ellipse(28, 14, 3, 4, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(36, 14, 3, 4, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Jaw
+            ctx.fillStyle = '#f0f0f0';
+            ctx.beginPath();
+            ctx.ellipse(32, 22, 8, 4, 0, 0, Math.PI);
+            ctx.fill();
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(24, 22);
+            ctx.lineTo(40, 22);
+            ctx.stroke();
+            
+            // Arms
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(16, 32, 12, 4); // Left arm
+            ctx.fillRect(36, 32, 12, 4); // Right arm
+            
+            // Legs
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(24, 48, 4, 12); // Left leg
+            ctx.fillRect(36, 48, 4, 12); // Right leg
+            
+            // Sword
+            ctx.fillStyle = '#a0a0a0';
+            ctx.fillRect(48, 28, 12, 2);
+            ctx.fillStyle = '#8b4513';
+            ctx.fillRect(44, 27, 4, 4);
+            
+            return canvas.toDataURL();
+        }
+
+        function createMiniBossSprite() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Body
+            ctx.fillStyle = '#ff6600';
+            ctx.beginPath();
+            ctx.ellipse(32, 32, 20, 24, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Head
+            ctx.fillStyle = '#ff6600';
+            ctx.beginPath();
+            ctx.ellipse(32, 16, 14, 12, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Eyes
+            ctx.fillStyle = '#ffff00';
+            ctx.beginPath();
+            ctx.ellipse(26, 14, 4, 4, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(38, 14, 4, 4, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.ellipse(26, 14, 2, 2, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(38, 14, 2, 2, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Mouth
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.ellipse(32, 22, 8, 4, 0, 0, Math.PI);
+            ctx.fill();
+            
+            // Horns
+            ctx.fillStyle = '#8b4513';
+            ctx.beginPath();
+            ctx.moveTo(22, 10);
+            ctx.lineTo(18, 2);
+            ctx.lineTo(26, 8);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(42, 10);
+            ctx.lineTo(46, 2);
+            ctx.lineTo(38, 8);
+            ctx.fill();
+            
+            // Weapon (axe)
+            ctx.fillStyle = '#8b4513';
+            ctx.fillRect(48, 28, 4, 16);
+            ctx.fillStyle = '#a0a0a0';
+            ctx.beginPath();
+            ctx.moveTo(52, 28);
+            ctx.lineTo(60, 22);
+            ctx.lineTo(60, 34);
+            ctx.lineTo(52, 28);
+            ctx.fill();
+            
+            return canvas.toDataURL();
+        }
+
+        function createBossSprite() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Body
+            ctx.fillStyle = '#990000';
+            ctx.fillRect(12, 12, 40, 40);
+            
+            // Head details
+            ctx.fillStyle = '#cc0000';
+            ctx.beginPath();
+            ctx.ellipse(32, 20, 16, 10, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Eyes
+            ctx.fillStyle = '#ffff00';
+            ctx.beginPath();
+            ctx.ellipse(24, 18, 5, 5, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(40, 18, 5, 5, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.ellipse(24, 18, 2, 3, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(40, 18, 2, 3, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Mouth
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.ellipse(32, 26, 10, 4, 0, 0, Math.PI);
+            ctx.fill();
+            
+            // Teeth
+            ctx.fillStyle = '#fff';
+            for (let i = 0; i < 5; i++) {
+                ctx.beginPath();
+                ctx.moveTo(24 + i * 4, 26);
+                ctx.lineTo(26 + i * 4, 26);
+                ctx.lineTo(25 + i * 4, 30);
+                ctx.fill();
+            }
+            
+            // Armor plates
+            ctx.fillStyle = '#660000';
+            ctx.fillRect(12, 32, 40, 4);
+            ctx.fillRect(12, 42, 40, 4);
+            
+            // Weapon (sword)
+            ctx.fillStyle = '#000';
+            ctx.fillRect(52, 20, 4, 24);
+            ctx.fillStyle = '#a0a0a0';
+            ctx.beginPath();
+            ctx.moveTo(54, 12);
+            ctx.lineTo(60, 20);
+            ctx.lineTo(48, 20);
+            ctx.fill();
+            
+            return canvas.toDataURL();
+        }
+
+        function createFloorSprite() {
+            // Check if we already have a cached floor sprite
+            if (sprites.floor) {
+                return sprites.floor;
+            }
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Base floor
+            ctx.fillStyle = '#aaa';
+            ctx.fillRect(0, 0, 64, 64);
+            
+            // Stone pattern
+            ctx.strokeStyle = '#888';
+            ctx.lineWidth = 1;
+            
+            // Horizontal lines
+            for (let y = 8; y < 64; y += 16) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(64, y);
+                ctx.stroke();
+            }
+            
+            // Vertical lines
+            for (let x = 8; x < 64; x += 16) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, 64);
+                ctx.stroke();
+            }
+            
+            // Deterministic cracks instead of random ones
+            ctx.strokeStyle = '#777';
+            const crackPositions = [
+                {x: 12, y: 15, length: 10, angle: 0.5},
+                {x: 32, y: 24, length: 8, angle: 1.2},
+                {x: 48, y: 40, length: 12, angle: 2.1},
+                {x: 20, y: 52, length: 9, angle: 3.6},
+                {x: 52, y: 8, length: 11, angle: 5.2}
+            ];
+            
+            for (const crack of crackPositions) {
+                ctx.beginPath();
+                ctx.moveTo(crack.x, crack.y);
+                ctx.lineTo(
+                    crack.x + Math.cos(crack.angle) * crack.length, 
+                    crack.y + Math.sin(crack.angle) * crack.length
+                );
+                ctx.stroke();
+            }
+            
+            return canvas.toDataURL();
+        }
+
+        function createWallSprite() {
+            // Check if we already have a cached wall sprite
+            if (sprites.wall) {
+                return sprites.wall;
+            }
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Base wall
+            ctx.fillStyle = '#555';
+            ctx.fillRect(0, 0, 64, 64);
+            
+            // Brick pattern
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            
+            // Horizontal lines
+            for (let y = 16; y < 64; y += 16) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(64, y);
+                ctx.stroke();
+            }
+            
+            // Vertical lines - staggered brick pattern
+            for (let row = 0; row < 4; row++) {
+                const offset = row % 2 === 0 ? 0 : 16;
+                for (let x = offset; x < 64; x += 32) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, row * 16);
+                    ctx.lineTo(x, row * 16 + 16);
+                    ctx.stroke();
+                }
+            }
+            
+            // Deterministic texture dots instead of random ones
+            ctx.fillStyle = '#444';
+            const dotPositions = [
+                {x: 10, y: 8, radius: 1.5},
+                {x: 25, y: 12, radius: 2},
+                {x: 40, y: 7, radius: 1.2},
+                {x: 55, y: 10, radius: 1.8},
+                {x: 15, y: 22, radius: 1.3},
+                {x: 30, y: 26, radius: 2.2},
+                {x: 48, y: 24, radius: 1.7},
+                {x: 8, y: 38, radius: 1.9},
+                {x: 22, y: 42, radius: 1.4},
+                {x: 38, y: 40, radius: 2.1},
+                {x: 52, y: 44, radius: 1.6},
+                {x: 12, y: 56, radius: 1.8},
+                {x: 28, y: 58, radius: 1.5},
+                {x: 44, y: 54, radius: 2},
+                {x: 58, y: 60, radius: 1.7},
+                {x: 18, y: 5, radius: 1.3},
+                {x: 34, y: 32, radius: 1.9},
+                {x: 50, y: 18, radius: 1.4},
+                {x: 5, y: 48, radius: 2.2},
+                {x: 60, y: 36, radius: 1.6}
+            ];
+            
+            for (const dot of dotPositions) {
+                ctx.beginPath();
+                ctx.arc(dot.x, dot.y, dot.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            return canvas.toDataURL();
+        }
+
+        function createChestSprite() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Chest base
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(12, 20, 40, 30);
+            
+            // Chest top
+            ctx.fillStyle = '#A0522D';
+            ctx.fillRect(12, 20, 40, 10);
+            
+            // Metal bands
+            ctx.fillStyle = '#555';
+            ctx.fillRect(12, 30, 40, 4);
+            ctx.fillRect(12, 40, 40, 4);
+            
+            // Lock
+            ctx.fillStyle = '#FFD700';
+            ctx.fillRect(28, 28, 8, 8);
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(32, 32, 2, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Highlights
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.fillRect(14, 22, 36, 2);
+            
+            return canvas.toDataURL();
+        }
+
+        function createDoorSprite() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Door base
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(8, 4, 48, 56);
+            
+            // Door frame
+            ctx.strokeStyle = '#4a3728';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(8, 4, 48, 56);
+            
+            // Door panels
+            ctx.fillStyle = '#6a4a38';
+            ctx.fillRect(14, 10, 16, 20);
+            ctx.fillRect(34, 10, 16, 20);
+            ctx.fillRect(14, 34, 16, 20);
+            ctx.fillRect(34, 34, 16, 20);
+            
+            // Door handle
+            ctx.fillStyle = '#FFD700';
+            ctx.beginPath();
+            ctx.arc(44, 32, 4, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Keyhole
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(44, 32, 2, 0, Math.PI * 2);
+            ctx.fill();
+            
+            return canvas.toDataURL();
+        }
+
+        // Player definition after gearList
+        let player = {
+            tileX: 1,
+            tileY: 1,
+            hp: 100,
+            maxHp: 100,
+            atk: 5,
+            def: 5,
+            spd: 5,
+            xp: 0,
+            level: 1,
+            skillPoints: 3,
+            inventory: [gearList[0]], // Start with Wooden Sword
+            equipped: { weapon: gearList[0], armor: null, accessory: null }, // Equip Wooden Sword
+            unlockedSkills: [],
+            hasKey: false,
+            facingDirection: 'right',
+            hitFrame: 0,
+            doorOpened: false, // Add new flag
+            lastHitTime: 0, // Track when player was last hit
+            invulnerabilityTime: 500 // 500ms of invulnerability after being hit
+        };
+
+        // Add spell effects tracking
+        let spellEffects = { powerStrike: 0, healingSpell: 0, fireball: 0 };
+
+        // Add projectiles
+        let projectiles = [];
+
+        // Add cooldown tracking
+        let skillCooldowns = {
+            'Power Strike': 0,
+            'Healing Spell': 0,
+            'Fireball': 0
+        };
+
+        // Modify Projectile class
+        class Projectile {
+            constructor(x, y, dx, dy, type) {
+                this.x = x;
+                this.y = y;
+                this.dx = dx * 0.1; // Reduced speed to 1/3
+                this.dy = dy * 0.1; // Reduced speed to 1/3
+                this.type = type;
+                this.frame = 0;
+            }
+
+            update() {
+                this.x += this.dx;
+                this.y += this.dy;
+                this.frame++;
+                return this.frame < 60; // Increased lifetime to compensate for slower speed
+            }
+        }
+
+        // Modify activateSkill function
+        function activateSkill(skillName) {
+            const currentTime = Date.now();
+            
+            // Check cooldowns
+            if (skillCooldowns[skillName] > currentTime) {
+                return; // Skill is on cooldown
+            }
+            
+            switch (skillName) {
+                case 'Power Strike':
+                    spellEffects.powerStrike = 1;
+                    player.atk *= 1.5;
+                    skillCooldowns[skillName] = currentTime + 10000; // 10 seconds
+                    break;
+                case 'Healing Spell':
+                    spellEffects.healingSpell = 120;
+                    player.hp = Math.min(player.maxHp, player.hp + 50); // Buffed to 50 HP
+                    skillCooldowns[skillName] = currentTime + 7000; // 7 seconds
+                    break;
+                case 'Fireball':
+                    const dx = player.facingDirection === 'right' ? 1 : player.facingDirection === 'left' ? -1 : 0;
+                    const dy = player.facingDirection === 'down' ? 1 : player.facingDirection === 'up' ? -1 : 0;
+                    projectiles.push(new Projectile(player.tileX, player.tileY, dx, dy, 'fireball'));
+                    spellEffects.fireball = 15;
+                    skillCooldowns[skillName] = currentTime + 5000; // 5 seconds
+                    break;
+            }
+        }
+
+        // Monsters
+        let monsters = [];
+        function spawnMonsters() {
+            monsters = [];
+            for (let i = 0; i < 7; i++) {
+                let x, y;
+                do { x = Math.floor(Math.random() * mapWidth); y = Math.floor(Math.random() * mapHeight); }
+                while (map[y][x] !== 1 || (x === player.tileX && y === player.tileY));
+                monsters.push({ type: 'goblin', hp: 20, atk: 15, spd: 1.5, tileX: x, tileY: y, xp: 50, lastMoveTime: 0, hitFrame: 0 }); // Increased from 3 to 15 (5x damage)
+            }
+            for (let i = 0; i < 2; i++) {
+                let x, y;
+                do { x = Math.floor(Math.random() * mapWidth); y = Math.floor(Math.random() * mapHeight); }
+                while (map[y][x] !== 1 || (x === player.tileX && y === player.tileY));
+                monsters.push({ type: 'skeleton', hp: 30, atk: 25, spd: 1, tileX: x, tileY: y, xp: 100, lastMoveTime: 0, hitFrame: 0 }); // Increased from 5 to 25 (5x damage)
+            }
+            monsters.push({ type: 'mini-boss', hp: 100, atk: 35, spd: 1.5, tileX: mapWidth - 3, tileY: mapHeight - 3, xp: 250, dropsKey: true, lastMoveTime: 0, hitFrame: 0 }); // Increased from 7 to 35 (5x damage)
+            monsters.push({ type: 'boss', hp: 200, atk: 50, spd: 1, tileX: mapWidth - 1, tileY: mapHeight - 1, xp: 1000, lastMoveTime: 0, hitFrame: 0 }); // Increased from 10 to 50 (5x damage)
+        }
+        spawnMonsters();
+
+        // Gear and chests
+        let chests = [];
+        function spawnChests() {
+            // Define which items can be in chests (excluding Wooden Sword and Legendary Sword)
+            const chestLoot = [
+                gearList[1],  // Iron Sword
+                gearList[2],  // Leather Armor
+                gearList[3],  // Chain Mail
+                gearList[4],  // Ring of Strength
+                gearList[6],  // Steel Axe
+                gearList[7],  // Plate Armor
+                gearList[8],  // Speed Ring
+                gearList[9]   // Magic Staff
+            ];
+            
+            // Create a copy of the loot pool to prevent duplicates
+            let availableLoot = [...chestLoot];
+            
+            // Spawn 4 random chests (increased from 3)
+            for (let i = 0; i < 4; i++) {
+                let x, y;
+                do {
+                    x = Math.floor(Math.random() * (mapWidth - 2)) + 1;
+                    y = Math.floor(Math.random() * (mapHeight - 2)) + 1;
+                } while (
+                    map[y][x] !== 1 || // Must be on floor
+                    (x === player.tileX && y === player.tileY) || // Not on player
+                    chests.some(chest => chest.tileX === x && chest.tileY === y) || // Not on another chest
+                    (x >= mapWidth - 3 && y >= mapHeight - 3) // Not in boss area
+                );
+                
+                // Select random loot from available items and remove it from the pool
+                const randomIndex = Math.floor(Math.random() * availableLoot.length);
+                const randomLoot = availableLoot[randomIndex];
+                availableLoot.splice(randomIndex, 1); // Remove the selected item from available loot
+                
+                chests.push({ tileX: x, tileY: y, gear: randomLoot });
+                map[y][x] = 2; // Mark as chest on map
+            }
+        }
+        spawnChests();
+
+        // Skills
+        const skills = [
+            { name: 'Power Strike', cost: 1, prereq: null, effect: 'Next attack 150%' },
+            { name: 'Healing Spell', cost: 1, prereq: 'Power Strike', effect: 'Restore 50 HP' },
+            { name: 'Fireball', cost: 1, prereq: 'Power Strike', effect: '10 + 50% ATK dmg' }
+        ];
+
+        // Game state
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let lastMoveTime = 0;
+        let lastAttackTime = 0;
+        const attackInterval = 500;
+        let isInventoryOpen = false;
+        let isSkillMenuOpen = false;
+        let selectedIndex = 0;
+        let selectedSkillIndex = 0;
+        let gameOver = false;
+        let walkFrame = 0;
+        let keys = {
+            ArrowLeft: false, ArrowRight: false, ArrowUp: false, ArrowDown: false,
+            KeyA: false, KeyD: false, KeyW: false, KeyS: false,
+            Space: false, KeyE: false, KeyI: false, KeyY: false,
+            Digit1: false, Digit2: false, Digit3: false // Add number keys for skills
+        };
+
+        // Event listeners
+        document.addEventListener('keydown', (e) => {
+            if (gameOver) return;
+            
+            // Handle menu toggles first
+            if (e.code === 'KeyI') {
+                toggleInventory();
+                e.preventDefault();
+                return;
+            }
+            if (e.code === 'KeyY') {
+                toggleSkillMenu();
+                e.preventDefault();
+                return;
+            }
+            
+            // Handle skill activation
+            if (!isInventoryOpen && !isSkillMenuOpen) {
+                if (e.code === 'Digit1' && player.unlockedSkills.includes('Power Strike')) {
+                    activateSkill('Power Strike');
+                    e.preventDefault();
+                    return;
+                }
+                if (e.code === 'Digit2' && player.unlockedSkills.includes('Healing Spell')) {
+                    activateSkill('Healing Spell');
+                    e.preventDefault();
+                    return;
+                }
+                if (e.code === 'Digit3' && player.unlockedSkills.includes('Fireball')) {
+                    activateSkill('Fireball');
+                    e.preventDefault();
+                    return;
+                }
+            }
+            
+            // Handle menu navigation
+            if (isInventoryOpen) {
+                handleInventoryInput(e);
+                return;
+            }
+            if (isSkillMenuOpen) {
+                handleSkillInput(e);
+                return;
+            }
+            
+            // Only update movement keys if not in menus
+            if (!isInventoryOpen && !isSkillMenuOpen && keys.hasOwnProperty(e.code)) {
+                keys[e.code] = true;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (!isInventoryOpen && !isSkillMenuOpen && keys.hasOwnProperty(e.code)) {
+                keys[e.code] = false;
+            }
+        });
+
+        // Drawing functions
+        function drawFloor(x, y) {
+            ctx.drawImage(loadedImages.floor, 0, 0, 64, 64, x, y, tileSize, tileSize);
+        }
+
+        function drawWall(x, y) {
+            ctx.drawImage(loadedImages.wall, 0, 0, 64, 64, x, y, tileSize, tileSize);
+        }
+
+        function drawPlayer(x, y) {
+            // Draw player sprite first
+            ctx.drawImage(loadedImages.player, 0, 0, 64, 64, x, y, tileSize, tileSize);
+            
+            // Show red flash when hit - enhanced effect
+            if (player.hitFrame > 0) {
+                ctx.save();
+                // Draw red overlay on player
+                ctx.globalCompositeOperation = 'source-over';
+                
+                // More intense red for higher hit frames (critical hits)
+                const hitIntensity = Math.min(0.8, 0.4 + (player.hitFrame / 20));
+                ctx.fillStyle = `rgba(255, 0, 0, ${hitIntensity})`; 
+                ctx.fillRect(x, y, tileSize, tileSize);
+                
+                // Add a subtle red glow around player
+                const gradient = ctx.createRadialGradient(
+                    x + tileSize/2, y + tileSize/2, 0,
+                    x + tileSize/2, y + tileSize/2, tileSize * 1.5
+                );
+                gradient.addColorStop(0, `rgba(255, 0, 0, ${hitIntensity * 0.7})`);
+                gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(x - tileSize, y - tileSize, tileSize * 3, tileSize * 3);
+                
+                ctx.restore();
+                player.hitFrame--;
+            }
+            
+            // Show invulnerability effect
+            const currentTime = Date.now();
+            if (currentTime - player.lastHitTime < player.invulnerabilityTime) {
+                ctx.save();
+                // Create a pulsing shield effect
+                const pulseIntensity = 0.3 + 0.2 * Math.sin(currentTime / 100); // Pulsing between 0.3 and 0.5 opacity
+                ctx.strokeStyle = `rgba(100, 200, 255, ${pulseIntensity})`;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(x + tileSize/2, y + tileSize/2, tileSize/2 + 2, 0, Math.PI * 2);
+                ctx.stroke();
+                
+                // Add a subtle blue glow
+                const shieldGradient = ctx.createRadialGradient(
+                    x + tileSize/2, y + tileSize/2, tileSize/2,
+                    x + tileSize/2, y + tileSize/2, tileSize
+                );
+                shieldGradient.addColorStop(0, 'rgba(100, 200, 255, 0.2)');
+                shieldGradient.addColorStop(1, 'rgba(100, 200, 255, 0)');
+                ctx.fillStyle = shieldGradient;
+                ctx.beginPath();
+                ctx.arc(x + tileSize/2, y + tileSize/2, tileSize, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+            
+            // Spell effect animations
+            if (spellEffects.powerStrike > 0) {
+                ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(x, y, tileSize, tileSize);
+            }
+            if (spellEffects.healingSpell > 0) {
+                ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+                ctx.beginPath();
+                ctx.arc(x + tileSize / 2, y + tileSize / 2, tileSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            if (spellEffects.fireball > 0) {
+                ctx.fillStyle = 'rgba(255, 165, 0, 0.7)';
+                for (let i = 0; i < 3; i++) {
+                    const sparkX = x + tileSize / 2 + Math.random() * tileSize - tileSize / 2;
+                    const sparkY = y + tileSize / 2 + Math.random() * tileSize - tileSize / 2;
+                    ctx.fillRect(sparkX, sparkY, 2, 2);
+                }
+            }
+            
+            // Health bar
+            const healthPercent = player.hp / player.maxHp;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(x + 5, y - 10, tileSize - 10, 5);
+            ctx.fillStyle = healthPercent > 0.5 ? 'rgba(0, 255, 0, 0.7)' :
+                            healthPercent > 0.25 ? 'rgba(255, 255, 0, 0.7)' :
+                            'rgba(255, 0, 0, 0.7)';
+            ctx.fillRect(x + 5, y - 10, (tileSize - 10) * healthPercent, 5);
+        }
+
+        function drawMonster(m, screenX, screenY) {
+            let monsterImage;
+            
+            if (m.type === 'goblin') {
+                monsterImage = loadedImages.goblin;
+            } else if (m.type === 'skeleton') {
+                monsterImage = loadedImages.skeleton;
+            } else if (m.type === 'mini-boss') {
+                monsterImage = loadedImages.miniBoss;
+            } else if (m.type === 'boss') {
+                monsterImage = loadedImages.boss;
+            }
+            
+            ctx.drawImage(monsterImage, 0, 0, 64, 64, screenX, screenY, tileSize, tileSize);
+            
+            if (m.hitFrame > 0) {
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.5)'; // Semi-transparent red when hit
+                ctx.fillRect(screenX, screenY, tileSize, tileSize);
+            }
+            
+            // Draw monster health bar
+            const maxHealth = m.type === 'goblin' ? 20 : m.type === 'skeleton' ? 30 : m.type === 'mini-boss' ? 100 : 200;
+            const healthPercent = m.hp / maxHealth;
+            
+            // Health bar background
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(screenX + 5, screenY - 10, tileSize - 10, 5);
+            
+            // Health bar fill
+            ctx.fillStyle = healthPercent > 0.5 ? 'rgba(0, 255, 0, 0.7)' : // Green if > 50%
+                           healthPercent > 0.25 ? 'rgba(255, 255, 0, 0.7)' : // Yellow if > 25%
+                           'rgba(255, 0, 0, 0.7)'; // Red if <= 25%
+            ctx.fillRect(screenX + 5, screenY - 10, (tileSize - 10) * healthPercent, 5);
+        }
+
+        function drawChest(x, y) {
+            ctx.drawImage(loadedImages.chest, 0, 0, 64, 64, x, y, tileSize, tileSize);
+        }
+
+        function drawDoor(x, y) {
+            ctx.drawImage(loadedImages.door, 0, 0, 64, 64, x, y, tileSize, tileSize);
+        }
+
+        function drawProjectiles(offsetX, offsetY) {
+            projectiles.forEach(proj => {
+                if (proj.type === 'fireball') {
+                    // Draw fireball
+                    const screenX = proj.x * tileSize - offsetX;
+                    const screenY = proj.y * tileSize - offsetY;
+                    
+                    // Fireball core
+                    ctx.fillStyle = 'rgba(255, 50, 0, 0.8)';
+            ctx.beginPath();
+                    ctx.arc(screenX + tileSize/2, screenY + tileSize/2, tileSize/3, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Flame effect
+                    ctx.fillStyle = 'rgba(255, 165, 0, 0.6)';
+                    for (let i = 0; i < 5; i++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const dist = Math.random() * tileSize/2;
+                        ctx.beginPath();
+                        ctx.arc(
+                            screenX + tileSize/2 + Math.cos(angle) * dist,
+                            screenY + tileSize/2 + Math.sin(angle) * dist,
+                            tileSize/6,
+                            0,
+                            Math.PI * 2
+                        );
+                        ctx.fill();
+                    }
+                }
+            });
+        }
+
+        function drawMap() {
+            const offsetX = Math.max(0, Math.min(player.tileX * tileSize - canvas.width / 2 + tileSize / 2, mapWidth * tileSize - canvas.width));
+            const offsetY = Math.max(0, Math.min(player.tileY * tileSize - canvas.height / 2 + tileSize / 2, mapHeight * tileSize - canvas.height));
+            const startX = Math.floor(offsetX / tileSize);
+            const endX = Math.min(mapWidth - 1, Math.ceil((offsetX + canvas.width) / tileSize));
+            const startY = Math.floor(offsetY / tileSize);
+            const endY = Math.min(mapHeight - 1, Math.ceil((offsetY + canvas.height) / tileSize));
+
+            // Apply screen shake effect
+            let shakeOffsetX = 0;
+            let shakeOffsetY = 0;
+            if (screenShake > 0) {
+                shakeOffsetX = (Math.random() - 0.5) * screenShake;
+                shakeOffsetY = (Math.random() - 0.5) * screenShake;
+                screenShake--;
+            }
+
+            // Fill the canvas with the background color first to avoid brown background
+            ctx.fillStyle = '#2a1f15'; // Match the canvas background color
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Save context before applying shake
+            ctx.save();
+            ctx.translate(shakeOffsetX, shakeOffsetY);
+
+            // Draw the map tiles
+            for (let y = startY; y <= endY; y++) {
+                for (let x = startX; x <= endX; x++) {
+                    const screenX = x * tileSize - offsetX;
+                    const screenY = y * tileSize - offsetY;
+                    if (map[y][x] === 0) {
+                        drawWall(screenX, screenY);
+                    } else if (map[y][x] === 1) {
+                        drawFloor(screenX, screenY);
+                    } else if (map[y][x] === 2) {
+                        drawFloor(screenX, screenY);
+                        drawChest(screenX, screenY);
+                    } else if (map[y][x] === 3) {
+                        drawFloor(screenX, screenY);
+                        drawDoor(screenX, screenY);
+                        // Add visual indicator if door is opened
+                        if (player.doorOpened) {
+                            ctx.fillStyle = 'rgba(255, 215, 0, 0.3)'; // Golden glow
+                            ctx.fillRect(screenX, screenY, tileSize, tileSize);
+                        }
+                    }
+                }
+            }
+
+            monsters.forEach(m => {
+                const screenX = m.tileX * tileSize - offsetX;
+                const screenY = m.tileY * tileSize - offsetY;
+                drawMonster(m, screenX, screenY);
+            });
+
+            const playerScreenX = player.tileX * tileSize - offsetX;
+            const playerScreenY = player.tileY * tileSize - offsetY;
+            drawPlayer(playerScreenX, playerScreenY);
+
+            // Draw projectiles
+            drawProjectiles(offsetX, offsetY);
+
+            // Draw damage texts
+            drawDamageTexts();
+
+            // Restore context after drawing game elements with shake
+            ctx.restore();
+
+            // Draw in-game HUD (without shake effect)
+            drawHUD();
+
+            if (gameOver) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = '30px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2);
+            }
+        }
+
+        // Draw in-game HUD
+        function drawHUD() {
+            // HUD background - moved to right side, made more transparent and smaller
+            ctx.fillStyle = 'rgba(244, 228, 188, 0.5)';
+            ctx.fillRect(canvas.width - 150, 10, 140, 160);
+            ctx.strokeStyle = '#8B4513';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(canvas.width - 150, 10, 140, 160);
+            
+            // HUD text
+            ctx.fillStyle = '#000';
+            ctx.font = '14px Georgia';
+            ctx.textAlign = 'left';
+            const startX = canvas.width - 142;
+            ctx.fillText(`Floor: ${currentFloor}/${maxFloors}`, startX, 30);
+            ctx.fillText(`HP: ${player.hp}/${player.maxHp}`, startX, 48);
+            ctx.fillText(`ATK: ${player.atk}`, startX, 66);
+            // Calculate and display damage reduction percentage
+            const defReduction = Math.min(75, player.def * 3);
+            ctx.fillText(`DEF: ${player.def} (${defReduction}% reduction)`, startX, 84);
+            ctx.fillText(`Level: ${player.level} (XP: ${player.xp})`, startX, 102);
+            
+            // Skills header
+            ctx.fillText('Skills:', startX, 128);
+            
+            // Draw skills list with cooldowns - adjusted spacing
+            ctx.font = '12px Georgia';
+            const currentTime = Date.now();
+            let yPos = 146;
+            
+            if (player.unlockedSkills.includes('Power Strike')) {
+                const cooldown = Math.max(0, (skillCooldowns['Power Strike'] - currentTime) / 1000).toFixed(1);
+                const cooldownText = cooldown > 0 ? ` (${cooldown}s)` : ' [1]';
+                ctx.fillStyle = cooldown > 0 ? '#666' : '#000';
+                ctx.fillText(`Power Strike${cooldownText}`, startX, yPos);
+                yPos += 16;
+            }
+            
+            if (player.unlockedSkills.includes('Healing Spell')) {
+                const cooldown = Math.max(0, (skillCooldowns['Healing Spell'] - currentTime) / 1000).toFixed(1);
+                const cooldownText = cooldown > 0 ? ` (${cooldown}s)` : ' [2]';
+                ctx.fillStyle = cooldown > 0 ? '#666' : '#000';
+                ctx.fillText(`Healing Spell${cooldownText}`, startX, yPos);
+                yPos += 16;
+            }
+            
+            if (player.unlockedSkills.includes('Fireball')) {
+                const cooldown = Math.max(0, (skillCooldowns['Fireball'] - currentTime) / 1000).toFixed(1);
+                const cooldownText = cooldown > 0 ? ` (${cooldown}s)` : ' [3]';
+                ctx.fillStyle = cooldown > 0 ? '#666' : '#000';
+                ctx.fillText(`Fireball${cooldownText}`, startX, yPos);
+            }
+            
+            // Key indicator
+            if (player.hasKey) {
+                ctx.fillStyle = '#FFD700';
+                ctx.fillRect(canvas.width - 35, 30, 20, 10);
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(canvas.width - 35, 30, 20, 10);
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.arc(canvas.width - 30, 35, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // Movement and actions
+        function tryMove(dx, dy) {
+            const newX = player.tileX + dx;
+            const newY = player.tileY + dy;
+            if (newX >= 0 && newX < mapWidth && newY >= 0 && newY < mapHeight) {
+                if (map[newY][newX] === 1 || map[newY][newX] === 2) {
+                    player.tileX = newX;
+                    player.tileY = newY;
+                    if (dx === 1) player.facingDirection = 'right';
+                    else if (dx === -1) player.facingDirection = 'left';
+                    else if (dy === -1) player.facingDirection = 'up';
+                    else if (dy === 1) player.facingDirection = 'down';
+
+                    // Check for floor transition at the boss room position
+                    if (newX === mapWidth - 1 && newY === mapHeight - 1 && !monsters.some(m => m.type === 'boss')) {
+                        handleFloorTransition();
+                    }
+                } else if (map[newY][newX] === 3 && player.hasKey) {
+                    // Handle door opening
+                    player.doorOpened = true;
+                    player.tileX = newX;
+                    player.tileY = newY;
+                    if (dx === 1) player.facingDirection = 'right';
+                    else if (dx === -1) player.facingDirection = 'left';
+                    else if (dy === -1) player.facingDirection = 'up';
+                    else if (dy === 1) player.facingDirection = 'down';
+                    
+                    // Check for floor transition at the door position if boss is defeated
+                    if (player.doorOpened && !monsters.some(m => m.type === 'boss')) {
+                        handleFloorTransition();
+                    }
+                }
+            }
+        }
+
+        // New function to handle floor transitions
+        function handleFloorTransition() {
+            console.log("Floor transition triggered!");
+            console.log("Current floor:", currentFloor, "Max floors:", maxFloors);
+            
+            if (currentFloor < maxFloors) {
+                // Create a transition message
+                const message = `Descending to Floor ${currentFloor + 1}...`;
+                
+                // Increment floor and generate new floor
+                currentFloor++;
+                
+                // Display transition message
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = '30px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(message, canvas.width / 2, canvas.height / 2);
+                
+                // Use setTimeout to ensure the message is displayed before generating the new floor
+                setTimeout(() => {
+                    generateFloor();
+                    console.log("New floor generated:", currentFloor);
+                }, 1000);
+            } else {
+                alert('Congratulations! You have cleared all floors!');
+                gameOver = true;
+            }
+        }
+
+        function performAttack() {
+            let dx = 0, dy = 0;
+            if (player.facingDirection === 'right') dx = 1;
+            else if (player.facingDirection === 'left') dx = -1;
+            else if (player.facingDirection === 'up') dy = -1;
+            else if (player.facingDirection === 'down') dy = 1;
+
+            const targetX = player.tileX + dx;
+            const targetY = player.tileY + dy;
+            const monster = monsters.find(m => m.tileX === targetX && m.tileY === targetY);
+            if (monster) {
+                // Add critical hit system (20% chance)
+                const isCritical = Math.random() < 0.2;
+                const damageMultiplier = isCritical ? 1.5 : 1;
+                const damage = Math.floor(player.atk * damageMultiplier);
+                
+                monster.hp -= damage;
+                monster.hitFrame = isCritical ? 10 : 5; // Longer hit effect for critical hits
+                console.log(`Attacked ${monster.type} for ${damage} damage${isCritical ? " (CRITICAL HIT!)" : ""}`);
+                
+                // Calculate the correct screen position for the monster
+                const offsetX = Math.max(0, Math.min(player.tileX * tileSize - canvas.width / 2 + tileSize / 2, mapWidth * tileSize - canvas.width));
+                const offsetY = Math.max(0, Math.min(player.tileY * tileSize - canvas.height / 2 + tileSize / 2, mapHeight * tileSize - canvas.height));
+                const monsterScreenX = monster.tileX * tileSize - offsetX;
+                const monsterScreenY = monster.tileY * tileSize - offsetY;
+                
+                // Add damage text effect at the monster's position
+                damageTexts.push({
+                    x: monsterScreenX + tileSize/2,
+                    y: monsterScreenY - 10, // Start above the monster
+                    text: isCritical ? `CRIT! ${damage}` : `${damage}`,
+                    color: isCritical ? '#ff0000' : '#ffffff',
+                    size: isCritical ? 24 : 16,
+                    life: 40,
+                    velY: -1.5 // Move upward
+                });
+                
+                // Add visual effect for critical hits
+                if (isCritical) {
+                    // Add a flash effect
+                    screenShake = 5;
+                    
+                    // Add a critical hit flash effect
+                    criticalHitEffects.push({
+                        x: monsterScreenX,
+                        y: monsterScreenY,
+                        size: tileSize * 2,
+                        life: 15,
+                        monster: monster
+                    });
+                }
+                
+                // Remove Power Strike buff after attack
+                if (spellEffects.powerStrike > 0) {
+                    spellEffects.powerStrike = 0;
+                    player.atk /= 1.5; // Remove the 50% buff
+                }
+                
+                if (monster.hp <= 0) {
+                    player.xp += monster.xp;
+                    if (monster.dropsKey) player.hasKey = true;
+                    if (monster.type === 'boss') {
+                        player.inventory.push(gearList.find(g => g.name === 'Legendary Sword'));
+                        alert('You defeated the boss and won!');
+                    }
+                    monsters = monsters.filter(m => m !== monster);
+                    checkLevelUp();
+                }
+            }
+        }
+
+        function openChest() {
+            const chest = chests.find(c => c.tileX === player.tileX && c.tileY === player.tileY);
+            if (chest) {
+                player.inventory.push(chest.gear);
+                chests = chests.filter(c => c !== chest);
+                map[chest.tileY][chest.tileX] = 1;
+            }
+        }
+
+        // UI functions
+        function updateStats() {
+            player.atk = 10;
+            player.def = 5;
+            player.maxHp = 100 + (player.level - 1) * 10;
+            if (player.equipped.weapon) player.atk += player.equipped.weapon.atk;
+            if (player.equipped.armor) player.def += player.equipped.armor.def;
+            if (player.equipped.accessory) {
+                if (player.equipped.accessory.atk) player.atk += player.equipped.accessory.atk;
+                if (player.equipped.accessory.hp) player.maxHp += player.equipped.accessory.hp;
+            }
+            player.hp = Math.min(player.hp, player.maxHp);
+            loadSprites(); // Refresh sprite to show new weapon
+        }
+
+        function toggleInventory() {
+            isInventoryOpen = !isInventoryOpen;
+            const menu = document.getElementById('inventoryMenu');
+            menu.style.display = isInventoryOpen ? 'block' : 'none';
+            if (isInventoryOpen) {
+                const gearList = document.getElementById('gearList');
+                gearList.innerHTML = '';
+                player.inventory.forEach((gear, i) => {
+                    const li = document.createElement('li');
+                    li.textContent = gear.name + (player.equipped[gear.type] === gear ? ' (E)' : '');
+                    if (i === selectedIndex) li.classList.add('selected');
+                    gearList.appendChild(li);
+                });
+            }
+        }
+
+        function handleInventoryInput(e) {
+            // Prevent event propagation to stop arrow keys from moving player
+            e.preventDefault();
+            e.stopPropagation();
+            
+            if (e.code === 'ArrowUp') {
+                selectedIndex = Math.max(0, selectedIndex - 1);
+                updateInventoryDisplay();
+            } else if (e.code === 'ArrowDown') {
+                selectedIndex = Math.min(player.inventory.length - 1, selectedIndex + 1);
+                updateInventoryDisplay();
+            } else if (e.code === 'Enter') {
+                const gear = player.inventory[selectedIndex];
+                player.equipped[gear.type] = player.equipped[gear.type] === gear ? null : gear;
+                updateStats();
+                updateInventoryDisplay();
+            }
+        }
+
+        function updateInventoryDisplay() {
+            const gearList = document.getElementById('gearList');
+            gearList.innerHTML = '';
+            player.inventory.forEach((gear, i) => {
+                const li = document.createElement('li');
+                li.textContent = gear.name + (player.equipped[gear.type] === gear ? ' (E)' : '');
+                if (i === selectedIndex) li.classList.add('selected');
+                gearList.appendChild(li);
+            });
+        }
+
+        function toggleSkillMenu() {
+            isSkillMenuOpen = !isSkillMenuOpen;
+            const menu = document.getElementById('skillMenu');
+            menu.style.display = isSkillMenuOpen ? 'block' : 'none';
+            if (isSkillMenuOpen) {
+                document.getElementById('skillPoints').textContent = player.skillPoints;
+                const skillList = document.getElementById('skillList');
+                skillList.innerHTML = '';
+                skills.forEach((skill, i) => {
+                    const li = document.createElement('li');
+                    li.textContent = `${skill.name} (Cost: ${skill.cost})`;
+                    li.className = player.unlockedSkills.includes(skill.name) ? 'unlocked' :
+                                  (player.skillPoints >= skill.cost && (!skill.prereq || player.unlockedSkills.includes(skill.prereq))) ? 'available' : 'locked';
+                    if (i === selectedSkillIndex) li.classList.add('selected');
+                    skillList.appendChild(li);
+                });
+            }
+        }
+
+        function handleSkillInput(e) {
+            // Prevent event propagation to stop arrow keys from moving player
+            e.preventDefault();
+            e.stopPropagation();
+            
+            if (e.code === 'ArrowUp') {
+                selectedSkillIndex = Math.max(0, selectedSkillIndex - 1);
+                updateSkillDisplay();
+            } else if (e.code === 'ArrowDown') {
+                selectedSkillIndex = Math.min(skills.length - 1, selectedSkillIndex + 1);
+                updateSkillDisplay();
+            } else if (e.code === 'Enter') {
+                const skill = skills[selectedSkillIndex];
+                if (player.skillPoints >= skill.cost && !player.unlockedSkills.includes(skill.name) && (!skill.prereq || player.unlockedSkills.includes(skill.prereq))) {
+                    player.skillPoints -= skill.cost;
+                    player.unlockedSkills.push(skill.name);
+                    updateSkillDisplay();
+                }
+            }
+        }
+
+        function updateSkillDisplay() {
+            document.getElementById('skillPoints').textContent = player.skillPoints;
+            const skillList = document.getElementById('skillList');
+            skillList.innerHTML = '';
+            skills.forEach((skill, i) => {
+                const li = document.createElement('li');
+                li.textContent = `${skill.name} (Cost: ${skill.cost})`;
+                li.className = player.unlockedSkills.includes(skill.name) ? 'unlocked' :
+                              (player.skillPoints >= skill.cost && (!skill.prereq || player.unlockedSkills.includes(skill.prereq))) ? 'available' : 'locked';
+                if (i === selectedSkillIndex) li.classList.add('selected');
+                skillList.appendChild(li);
+            });
+        }
+
+        function checkLevelUp() {
+            const xpNeeded = [0, 100, 300, 600, 1000];
+            while (player.level < 5 && player.xp >= xpNeeded[player.level]) {
+                player.level++;
+                player.skillPoints++;
+                player.hp = player.maxHp;
+            }
+            updateStats();
+        }
+
+        // Game loop
+        function gameLoop(timestamp) {
+            if (gameOver) {
+                drawMap();
+                return;
+            }
+
+            // Clear the canvas at the beginning of each frame
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            walkFrame = (walkFrame + 1) % 20;
+            monsters.forEach(m => { if (m.hitFrame > 0) m.hitFrame--; });
+            
+            // Update projectiles
+            projectiles = projectiles.filter(proj => {
+                if (proj.type === 'fireball') {
+                    // Track if projectile hit something this frame
+                    let hitSomething = false;
+                    
+                    // Check for monster hits
+                    for (let i = 0; i < monsters.length; i++) {
+                        const m = monsters[i];
+                        if (Math.abs(m.tileX - proj.x) < 0.5 && Math.abs(m.tileY - proj.y) < 0.5) {
+                            // Add critical hit chance for fireballs (20% chance)
+                            const isCritical = Math.random() < 0.2;
+                            const damageMultiplier = isCritical ? 1.5 : 1;
+                            
+                            // Calculate fireball damage based on player's attack instead of fixed value
+                            const baseFireballDamage = 10 + Math.floor(player.atk * 0.5);
+                            const fireballDamage = Math.floor(baseFireballDamage * damageMultiplier);
+                            
+                            m.hp -= fireballDamage;
+                            m.hitFrame = isCritical ? 10 : 5; // Longer hit effect for critical hits
+                            
+                            // Calculate the correct screen position for the monster
+                            const offsetX = Math.max(0, Math.min(player.tileX * tileSize - canvas.width / 2 + tileSize / 2, mapWidth * tileSize - canvas.width));
+                            const offsetY = Math.max(0, Math.min(player.tileY * tileSize - canvas.height / 2 + tileSize / 2, mapHeight * tileSize - canvas.height));
+                            const monsterScreenX = m.tileX * tileSize - offsetX;
+                            const monsterScreenY = m.tileY * tileSize - offsetY;
+                            
+                            // Add damage text effect at the monster's position
+                            damageTexts.push({
+                                x: monsterScreenX + tileSize/2,
+                                y: monsterScreenY - 10, // Start above the monster
+                                text: isCritical ? `CRIT! ${fireballDamage}` : `${fireballDamage}`,
+                                color: isCritical ? '#ff0000' : '#ffaa00', // Orange for fireball damage
+                                size: isCritical ? 24 : 16,
+                                life: 40,
+                                velY: -1.5 // Move upward
+                            });
+                            
+                            // Add visual effect for critical hits
+                            if (isCritical) {
+                                // Add a flash effect
+                                screenShake = 5;
+                                
+                                // Add a critical hit flash effect
+                                criticalHitEffects.push({
+                                    x: monsterScreenX,
+                                    y: monsterScreenY,
+                                    size: tileSize * 2,
+                                    life: 15,
+                                    monster: m
+                                });
+                            }
+                            
+                            if (m.hp <= 0) {
+                                player.xp += m.xp;
+                                if (m.dropsKey) player.hasKey = true;
+                                monsters = monsters.filter(monster => monster !== m);
+                                checkLevelUp();
+                            }
+                            hitSomething = true;
+                            break; // Exit the loop after hitting one monster
+                        }
+                    }
+                    
+                    // If projectile hit something, remove it
+                    if (hitSomething) {
+                        return false;
+                    }
+                    
+                    // Check for wall collision
+                    const nextX = Math.floor(proj.x + proj.dx);
+                    const nextY = Math.floor(proj.y + proj.dy);
+                    if (nextX < 0 || nextX >= mapWidth || nextY < 0 || nextY >= mapHeight || map[nextY][nextX] === 0) {
+                        return false;
+                    }
+                }
+                return proj.update();
+            });
+
+            // Decrease spell effect durations
+            if (spellEffects.healingSpell > 0) spellEffects.healingSpell--;
+            if (spellEffects.fireball > 0) spellEffects.fireball--;
+
+            if (!isInventoryOpen && !isSkillMenuOpen) {
+                const moveInterval = 1000 / player.spd;
+                if (timestamp - lastMoveTime > moveInterval) {
+                    if (keys.ArrowLeft || keys.KeyA) { tryMove(-1, 0); lastMoveTime = timestamp; }
+                    else if (keys.ArrowRight || keys.KeyD) { tryMove(1, 0); lastMoveTime = timestamp; }
+                    else if (keys.ArrowUp || keys.KeyW) { tryMove(0, -1); lastMoveTime = timestamp; }
+                    else if (keys.ArrowDown || keys.KeyS) { tryMove(0, 1); lastMoveTime = timestamp; }
+                }
+
+                if (keys.Space && timestamp - lastAttackTime > attackInterval) {
+                    performAttack();
+                    lastAttackTime = timestamp;
+                }
+
+                if (keys.KeyE) openChest();
+            }
+
+            // Monster AI - only move monsters when player is not in menus
+            if (!isInventoryOpen && !isSkillMenuOpen) {
+                const currentTime = timestamp; // Use consistent timestamp
+                monsters.forEach(m => {
+                    if (!m.lastMoveTime) m.lastMoveTime = 0;
+                    if (currentTime - m.lastMoveTime > 1000 / m.spd) {
+                        const dx = player.tileX - m.tileX;
+                        const dy = player.tileY - m.tileY;
+                        const dist = Math.abs(dx) + Math.abs(dy);
+                        if (dist <= 1) {
+                            // Only apply damage if player is not invulnerable
+                            if (currentTime - player.lastHitTime > player.invulnerabilityTime) {
+                                // Add critical hit system (20% chance)
+                                const isCritical = Math.random() < 0.2;
+                                const damageMultiplier = isCritical ? 1.5 : 1;
+                                
+                                // Fix damage calculation - apply defense after multiplier
+                                const rawDamage = Math.floor(m.atk * damageMultiplier);
+                                // Change defense to reduce damage by a percentage instead of flat reduction
+                                // Each point of defense reduces damage by 3%, with a maximum reduction of 75%
+                                const defenseReduction = Math.min(0.75, player.def * 0.03);
+                                const damage = Math.max(1, Math.floor(rawDamage * (1 - defenseReduction)));
+                                
+                                player.hp -= damage;
+                                player.hitFrame = isCritical ? 10 : 5; // Longer hit effect for critical hits
+                                player.lastHitTime = currentTime; // Update last hit time
+                                
+                                // Calculate the correct screen position for the player
+                                const offsetX = Math.max(0, Math.min(player.tileX * tileSize - canvas.width / 2 + tileSize / 2, mapWidth * tileSize - canvas.width));
+                                const offsetY = Math.max(0, Math.min(player.tileY * tileSize - canvas.height / 2 + tileSize / 2, mapHeight * tileSize - canvas.height));
+                                const playerScreenX = player.tileX * tileSize - offsetX;
+                                const playerScreenY = player.tileY * tileSize - offsetY;
+                                
+                                // Add damage text effect at the player's position, starting above the player
+                                damageTexts.push({
+                                    x: playerScreenX + tileSize/2,
+                                    y: playerScreenY - 10, // Start above the player
+                                    text: isCritical ? 
+                                        `CRIT! ${damage} (${rawDamage}-${Math.round(rawDamage * defenseReduction)})` : 
+                                        `${damage} (${rawDamage}-${Math.round(rawDamage * defenseReduction)})`,
+                                    color: isCritical ? '#ff0000' : '#ffffff',
+                                    size: isCritical ? 24 : 16,
+                                    life: 40, // Increased lifetime
+                                    velY: -1.5 // Move upward faster
+                                });
+                                
+                                // Add visual effect for critical hits
+                                if (isCritical) {
+                                    // Add a flash effect
+                                    screenShake = 10;
+                                    
+                                    // Add a critical hit flash effect
+                                    criticalHitEffects.push({
+                                        x: playerScreenX,
+                                        y: playerScreenY,
+                                        size: tileSize * 2,
+                                        life: 15,
+                                        monster: m
+                                    });
+                                }
+                                
+                                if (player.hp <= 0) gameOver = true;
+                                updateStats();
+                            }
+                        } else if (dist <= 10) {
+                            const moveX = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : -1) : 0;
+                            const moveY = moveX === 0 ? (dy > 0 ? 1 : -1) : 0;
+                            const newX = m.tileX + moveX;
+                            const newY = m.tileY + moveY;
+                            if (map[newY][newX] === 1 || map[newY][newX] === 2) {
+                                m.tileX = newX;
+                                m.tileY = newY;
+                            }
+                            m.lastMoveTime = currentTime;
+                        }
+                    }
+                });
+            }
+
+            drawMap();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Initialize game
+        generateFloor(); // Replace map generation and spawnMonsters
+        updateStats();
+        loadSprites();
+        requestAnimationFrame(gameLoop);
+
+        // Add these variables after the player definition
+        let damageTexts = [];
+        let screenShake = 0;
+        let criticalHitEffects = []; // Add this new array for critical hit effects
+
+        // Add a function to draw damage texts
+        function drawDamageTexts() {
+            damageTexts = damageTexts.filter(text => {
+                text.y += text.velY;
+                text.life--;
+                
+                // Fade out effect
+                const alpha = Math.min(1, text.life / 20);
+                
+                // Draw text with better visibility
+                ctx.font = `bold ${text.size}px Arial`;
+                ctx.textAlign = 'center';
+                
+                // Add a thicker outline for better visibility
+                ctx.strokeStyle = 'rgba(0, 0, 0, ' + alpha + ')';
+                ctx.lineWidth = 4;
+                ctx.strokeText(text.text, text.x, text.y);
+                
+                // Draw the text with a glow effect for critical hits
+                if (text.color === '#ff0000') {
+                    // Add glow for critical hits
+                    ctx.shadowColor = 'rgba(255, 0, 0, ' + alpha + ')';
+                    ctx.shadowBlur = 10;
+                    ctx.shadowOffsetX = 0;
+                    ctx.shadowOffsetY = 0;
+                }
+                
+                ctx.fillStyle = text.color.replace(')', `, ${alpha})`).replace('rgb', 'rgba');
+                ctx.fillText(text.text, text.x, text.y);
+                
+                // Reset shadow
+                ctx.shadowBlur = 0;
+                
+                return text.life > 0;
+            });
+        }
+
+        // Add a function to draw critical hit effects
+        function drawCriticalHitEffects(offsetX, offsetY) {
+            criticalHitEffects = criticalHitEffects.filter(effect => {
+                effect.life--;
+                
+                // Calculate the position of the effect
+                const screenX = effect.monster.tileX * tileSize - offsetX;
+                const screenY = effect.monster.tileY * tileSize - offsetY;
+                
+                // Draw a line from monster to player
+                const playerScreenX = player.tileX * tileSize - offsetX;
+                const playerScreenY = player.tileY * tileSize - offsetY;
+                
+                ctx.save();
+                
+                // Draw lightning-like effect between monster and player
+                ctx.strokeStyle = `rgba(255, 0, 0, ${effect.life / 15})`;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                
+                // Start at monster
+                ctx.moveTo(screenX + tileSize/2, screenY + tileSize/2);
+                
+                // Add some jagged points for lightning effect
+                const midX = (screenX + playerScreenX) / 2 + (Math.random() * 20 - 10);
+                const midY = (screenY + playerScreenY) / 2 + (Math.random() * 20 - 10);
+                ctx.lineTo(midX, midY);
+                
+                // End at player
+                ctx.lineTo(playerScreenX + tileSize/2, playerScreenY + tileSize/2);
+                ctx.stroke();
+                
+                // Draw a flash around the monster
+                const gradient = ctx.createRadialGradient(
+                    screenX + tileSize/2, screenY + tileSize/2, 0,
+                    screenX + tileSize/2, screenY + tileSize/2, effect.size/2
+                );
+                gradient.addColorStop(0, `rgba(255, 0, 0, ${effect.life / 30})`);
+                gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
+                
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(screenX + tileSize/2, screenY + tileSize/2, effect.size/2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.restore();
+                
+                return effect.life > 0;
+            });
+        }
+
+        // Update the drawMap function to include critical hit effects
+        function drawMap() {
+            const offsetX = Math.max(0, Math.min(player.tileX * tileSize - canvas.width / 2 + tileSize / 2, mapWidth * tileSize - canvas.width));
+            const offsetY = Math.max(0, Math.min(player.tileY * tileSize - canvas.height / 2 + tileSize / 2, mapHeight * tileSize - canvas.height));
+            const startX = Math.floor(offsetX / tileSize);
+            const endX = Math.min(mapWidth - 1, Math.ceil((offsetX + canvas.width) / tileSize));
+            const startY = Math.floor(offsetY / tileSize);
+            const endY = Math.min(mapHeight - 1, Math.ceil((offsetY + canvas.height) / tileSize));
+
+            // Apply screen shake effect
+            let shakeOffsetX = 0;
+            let shakeOffsetY = 0;
+            if (screenShake > 0) {
+                shakeOffsetX = (Math.random() - 0.5) * screenShake;
+                shakeOffsetY = (Math.random() - 0.5) * screenShake;
+                screenShake--;
+            }
+
+            // Fill the canvas with the background color first to avoid brown background
+            ctx.fillStyle = '#2a1f15'; // Match the canvas background color
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Save context before applying shake
+            ctx.save();
+            ctx.translate(shakeOffsetX, shakeOffsetY);
+
+            // Draw the map tiles
+            for (let y = startY; y <= endY; y++) {
+                for (let x = startX; x <= endX; x++) {
+                    const screenX = x * tileSize - offsetX;
+                    const screenY = y * tileSize - offsetY;
+                    if (map[y][x] === 0) {
+                        drawWall(screenX, screenY);
+                    } else if (map[y][x] === 1) {
+                        drawFloor(screenX, screenY);
+                    } else if (map[y][x] === 2) {
+                        drawFloor(screenX, screenY);
+                        drawChest(screenX, screenY);
+                    } else if (map[y][x] === 3) {
+                        drawFloor(screenX, screenY);
+                        drawDoor(screenX, screenY);
+                        // Add visual indicator if door is opened
+                        if (player.doorOpened) {
+                            ctx.fillStyle = 'rgba(255, 215, 0, 0.3)'; // Golden glow
+                            ctx.fillRect(screenX, screenY, tileSize, tileSize);
+                        }
+                    }
+                }
+            }
+
+            monsters.forEach(m => {
+                const screenX = m.tileX * tileSize - offsetX;
+                const screenY = m.tileY * tileSize - offsetY;
+                drawMonster(m, screenX, screenY);
+            });
+
+            const playerScreenX = player.tileX * tileSize - offsetX;
+            const playerScreenY = player.tileY * tileSize - offsetY;
+            drawPlayer(playerScreenX, playerScreenY);
+
+            // Draw projectiles
+            drawProjectiles(offsetX, offsetY);
+            
+            // Draw critical hit effects
+            drawCriticalHitEffects(offsetX, offsetY);
+
+            // Draw damage texts
+            drawDamageTexts();
+
+            // Restore context after drawing game elements with shake
+            ctx.restore();
+
+            // Draw in-game HUD (without shake effect)
+            drawHUD();
+
+            if (gameOver) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = '30px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2);
+            }
+        }
+    </script>
+</body>
+</html>
