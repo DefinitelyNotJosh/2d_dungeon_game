@@ -5,7 +5,7 @@
             "type": "chrome",
             "request": "launch",
             "name": "Open dungeon.html",
-            "file": "${workspaceFolder}/Trial1/dungeon.html"
+            "file": "${workspaceFolder}/index.html"
         }
     ]
 } 
