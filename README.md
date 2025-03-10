@@ -5,4 +5,4 @@ arrow keys/wasd to move
 'i' to open inventory
 'y' to open skill menu
 
-### Can be played at: [https://definitelynotjosh.github.io/2d_dungeon_game/]
+### Can be played at: [Game URL](https://definitelynotjosh.github.io/2d_dungeon_game/){:target="_blank"}
